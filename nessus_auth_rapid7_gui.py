@@ -52,6 +52,7 @@ import os
 import sys
 import queue
 import re
+import subprocess
 import tempfile
 import threading
 import time
@@ -1441,6 +1442,8 @@ class NessusAuthDashboardGUI:
     def populate_scan_tree(self):
         for item in self.scan_tree.get_children():
             self.scan_tree.delete(item)
+        self.selected_scan_id = None
+        self.selected_scan_name = ""
         for s in self.scans:
             scan_id = str(s.get("id", ""))
             name = str(s.get("name", ""))
@@ -1452,14 +1455,18 @@ class NessusAuthDashboardGUI:
                     lm = dt.datetime.fromtimestamp(lm).strftime("%Y-%m-%d %H:%M:%S")
                 except Exception:
                     lm = str(lm)
-            self.scan_tree.insert("", "end", iid=scan_id, values=(scan_id, name, status, folder, lm))
+            self.scan_tree.insert("", "end", values=(scan_id, name, status, folder, lm))
 
     def on_scan_select(self, _event=None):
         sel = self.scan_tree.selection()
         if not sel:
             return
-        scan_id = sel[0]
-        values = self.scan_tree.item(scan_id, "values")
+        values = self.scan_tree.item(sel[0], "values")
+        if len(values) < 2 or not values[0]:
+            self.selected_scan_id = None
+            self.selected_scan_name = ""
+            self.status_var.set("No valid scan selected")
+            return
         self.selected_scan_id = str(values[0])
         self.selected_scan_name = str(values[1])
         self.status_var.set(f"Selected scan {self.selected_scan_id}: {self.selected_scan_name}")
@@ -1794,6 +1801,8 @@ class NessusAuthDashboardGUI:
         if not sel:
             return
         values = self.host_tree.item(sel[0], "values")
+        if not values:
+            return
         host = str(values[0])
         hrec = next((h for h in self.data.host_records if h.host == host), None)
         if not hrec:
@@ -1832,8 +1841,12 @@ class NessusAuthDashboardGUI:
         if not sel:
             return
         values = self.finding_tree.item(sel[0], "values")
+        if len(values) < 3:
+            return
         host = str(values[0])
         plugin_id = safe_int(values[2])
+        if plugin_id is None:
+            return
         candidates = [f for f in self.data.findings if f.host == host and f.plugin_id == plugin_id]
         if not candidates:
             return
@@ -1927,10 +1940,14 @@ class NessusAuthDashboardGUI:
         try:
             if os.name == "nt":
                 os.startfile(str(folder))  # type: ignore[attr-defined]
-            elif sys.platform == "darwin":  # noqa: F821
-                os.system(f"open '{folder}'")
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(folder)])
             else:
-                os.system(f"xdg-open '{folder}' >/dev/null 2>&1 &")
+                subprocess.Popen(
+                    ["xdg-open", str(folder)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
         except Exception as exc:
             messagebox.showerror("Open Folder Failed", str(exc))
 
