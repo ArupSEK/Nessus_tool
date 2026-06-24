@@ -47,9 +47,13 @@ from __future__ import annotations
 
 import csv
 import datetime as dt
+import base64
+import hashlib
+import hmac
 import ipaddress
 import json
 import os
+import secrets
 import sys
 import queue
 import re
@@ -106,6 +110,8 @@ APP_NAME = "Nessus Credential Assurance Dashboard"
 APP_VERSION = "2.0"
 AUTHOR = "Sleeping Bhudda"
 USER_AGENT = f"nessus-auth-dashboard/{APP_VERSION} ({AUTHOR})"
+AUTH_CONFIG_PATH = Path.home() / ".nessus_credential_assurance_auth.json"
+AUTH_ITERATIONS = 260_000
 
 # -----------------------------
 # Classification constants
@@ -1183,6 +1189,141 @@ class Exporter:
             pdf.savefig(fig4)
 
 # -----------------------------
+# Local login
+# -----------------------------
+
+class LocalAuthManager:
+    def __init__(self, path: Path = AUTH_CONFIG_PATH):
+        self.path = path
+
+    def is_configured(self) -> bool:
+        return self.path.exists()
+
+    def load(self) -> Dict[str, Any]:
+        try:
+            return json.loads(self.path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    def configure(self, username: str, password: str) -> None:
+        username = username.strip()
+        if not username:
+            raise ValueError("Username is required.")
+        if len(password) < 8:
+            raise ValueError("Password must be at least 8 characters.")
+        salt = secrets.token_bytes(16)
+        password_hash = self.hash_password(password, salt)
+        payload = {
+            "username": username,
+            "salt": base64.b64encode(salt).decode("ascii"),
+            "password_hash": base64.b64encode(password_hash).decode("ascii"),
+            "iterations": AUTH_ITERATIONS,
+            "created_at": now_string(),
+        }
+        self.path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    def hash_password(self, password: str, salt: bytes, iterations: int = AUTH_ITERATIONS) -> bytes:
+        return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+
+    def verify(self, username: str, password: str) -> bool:
+        payload = self.load()
+        if username.strip() != str(payload.get("username", "")):
+            return False
+        try:
+            salt = base64.b64decode(payload.get("salt", ""))
+            expected = base64.b64decode(payload.get("password_hash", ""))
+            iterations = int(payload.get("iterations", AUTH_ITERATIONS))
+        except Exception:
+            return False
+        actual = self.hash_password(password, salt, iterations)
+        return hmac.compare_digest(actual, expected)
+
+
+class LoginDialog:
+    def __init__(self, root: tk.Tk, auth: LocalAuthManager):
+        self.root = root
+        self.auth = auth
+        self.authenticated = False
+        self.setup_mode = not auth.is_configured()
+        self.username_var = tk.StringVar()
+        self.password_var = tk.StringVar()
+        self.confirm_var = tk.StringVar()
+
+        self.window = tk.Toplevel(root)
+        self.window.title("Login")
+        self.window.resizable(False, False)
+        self.window.transient(root)
+        self.window.grab_set()
+        self.window.protocol("WM_DELETE_WINDOW", self.cancel)
+
+        self.build()
+        self.center()
+        self.username_entry.focus_set()
+
+    def build(self):
+        title = "Create Admin Login" if self.setup_mode else "Login Required"
+        subtitle = "First run setup" if self.setup_mode else APP_NAME
+        frame = ttk.Frame(self.window, padding=18)
+        frame.pack(fill="both", expand=True)
+
+        ttk.Label(frame, text=title, font=("Segoe UI", 15, "bold")).grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(frame, text=subtitle).grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 14))
+
+        ttk.Label(frame, text="Username").grid(row=2, column=0, sticky="w", pady=4)
+        self.username_entry = ttk.Entry(frame, textvariable=self.username_var, width=32)
+        self.username_entry.grid(row=2, column=1, sticky="ew", pady=4)
+
+        ttk.Label(frame, text="Password").grid(row=3, column=0, sticky="w", pady=4)
+        ttk.Entry(frame, textvariable=self.password_var, width=32, show="*").grid(row=3, column=1, sticky="ew", pady=4)
+
+        row = 4
+        if self.setup_mode:
+            ttk.Label(frame, text="Confirm").grid(row=row, column=0, sticky="w", pady=4)
+            ttk.Entry(frame, textvariable=self.confirm_var, width=32, show="*").grid(row=row, column=1, sticky="ew", pady=4)
+            row += 1
+
+        self.message_var = tk.StringVar()
+        ttk.Label(frame, textvariable=self.message_var).grid(row=row, column=0, columnspan=2, sticky="w", pady=(6, 8))
+        row += 1
+
+        button_text = "Create Login" if self.setup_mode else "Login"
+        ttk.Button(frame, text=button_text, command=self.submit).grid(row=row, column=1, sticky="e")
+        ttk.Button(frame, text="Exit", command=self.cancel).grid(row=row, column=0, sticky="w")
+
+        self.window.bind("<Return>", lambda _e: self.submit())
+        frame.columnconfigure(1, weight=1)
+
+    def center(self):
+        self.window.update_idletasks()
+        width = self.window.winfo_width()
+        height = self.window.winfo_height()
+        x = self.root.winfo_screenwidth() // 2 - width // 2
+        y = self.root.winfo_screenheight() // 2 - height // 2
+        self.window.geometry(f"+{x}+{y}")
+
+    def submit(self):
+        username = self.username_var.get().strip()
+        password = self.password_var.get()
+        try:
+            if self.setup_mode:
+                if password != self.confirm_var.get():
+                    raise ValueError("Passwords do not match.")
+                self.auth.configure(username, password)
+                self.authenticated = True
+            else:
+                if not self.auth.verify(username, password):
+                    raise ValueError("Invalid username or password.")
+                self.authenticated = True
+            self.window.destroy()
+        except Exception as exc:
+            self.message_var.set(str(exc))
+
+    def cancel(self):
+        self.authenticated = False
+        self.window.destroy()
+
+
+# -----------------------------
 # GUI Application
 # -----------------------------
 
@@ -2244,6 +2385,14 @@ class NessusAuthDashboardGUI:
 
 def main():
     root = tk.Tk()
+    root.withdraw()
+    auth = LocalAuthManager()
+    login = LoginDialog(root, auth)
+    root.wait_window(login.window)
+    if not login.authenticated:
+        root.destroy()
+        return
+    root.deiconify()
     app = NessusAuthDashboardGUI(root)
     root.mainloop()
 
