@@ -519,13 +519,18 @@ class NessusClient:
             raise RuntimeError(f"Nessus API error {r.status_code} for {method} {path}: {detail}")
         return r
 
-    def list_scans(self) -> List[Dict[str, Any]]:
+    def list_scan_inventory(self) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         data = self.request("GET", "/scans").json()
         scans = data.get("scans", []) or []
-        folders = {str(f.get("id")): f.get("name", "") for f in data.get("folders", []) or []}
+        folders = data.get("folders", []) or []
+        folder_names = {str(f.get("id")): f.get("name", "") for f in folders}
         for s in scans:
             fid = str(s.get("folder_id", ""))
-            s["folder_name"] = folders.get(fid, "")
+            s["folder_name"] = folder_names.get(fid, "")
+        return scans, folders
+
+    def list_scans(self) -> List[Dict[str, Any]]:
+        scans, _folders = self.list_scan_inventory()
         return scans
 
     def get_scan_details(self, scan_id: str, history_id: Optional[str] = None) -> Dict[str, Any]:
@@ -1159,12 +1164,15 @@ class NessusAuthDashboardGUI:
 
         self.data: Optional[DashboardData] = None
         self.scans: List[Dict[str, Any]] = []
+        self.scan_folders: List[Dict[str, Any]] = []
+        self.folder_label_to_id: Dict[str, str] = {}
         self.dark_mode = tk.BooleanVar(value=True)
         self.verify_tls = tk.BooleanVar(value=False)
         self.base_url_var = tk.StringVar(value="https://127.0.0.1:8834")
         self.access_key_var = tk.StringVar()
         self.secret_key_var = tk.StringVar()
         self.history_id_var = tk.StringVar()
+        self.folder_filter_var = tk.StringVar()
         self.filter_text_var = tk.StringVar()
         self.filter_status_var = tk.StringVar(value="ALL")
         self.status_var = tk.StringVar(value="Ready")
@@ -1322,8 +1330,16 @@ class NessusAuthDashboardGUI:
         ttk.Label(row1, text="Secret Key").pack(side="left")
         ttk.Entry(row1, textvariable=self.secret_key_var, width=38, show="*").pack(side="left", padx=5)
         ttk.Checkbutton(row1, text="Verify TLS", variable=self.verify_tls).pack(side="left", padx=6)
-        ttk.Button(row1, text="Test / Load Scans", command=self.load_scans_thread).pack(side="left", padx=4)
+        ttk.Button(row1, text="Test / Load Folders", command=self.load_scans_thread).pack(side="left", padx=4)
         ttk.Button(row1, text="Offline: Load CSV", command=self.load_offline_csv).pack(side="left", padx=4)
+
+        folder_row = ttk.Frame(container)
+        folder_row.pack(fill="x", padx=8, pady=(4, 2))
+        ttk.Label(folder_row, text="Folder").pack(side="left")
+        self.folder_combo = ttk.Combobox(folder_row, textvariable=self.folder_filter_var, width=42, state="readonly", values=[])
+        self.folder_combo.pack(side="left", padx=6)
+        self.folder_combo.bind("<<ComboboxSelected>>", self.on_folder_select)
+        ttk.Label(folder_row, text="Select a folder to show its scans").pack(side="left", padx=6)
 
         row2 = ttk.Frame(container)
         row2.pack(fill="both", expand=True, padx=8, pady=4)
@@ -1535,26 +1551,68 @@ class NessusAuthDashboardGUI:
 
     def _load_scans_worker(self):
         try:
-            self.thread_log("Connecting to Nessus and loading scans...")
+            self.thread_log("Connecting to Nessus and loading folders...")
             self.set_progress(10)
             client = self.make_client()
-            scans = client.list_scans()
+            scans, folders = client.list_scan_inventory()
             self.set_progress(70)
             self.scans = scans
-            self.root.after(0, self.populate_scan_tree)
-            self.thread_log(f"Loaded {len(scans)} scans.")
+            self.scan_folders = folders
+            self.root.after(0, self.populate_folder_selector)
+            self.thread_log(f"Loaded {len(folders)} folders and {len(scans)} scans.")
             self.set_progress(100)
         except Exception as exc:
             self.show_error("Load Scans Failed", str(exc))
             self.thread_log(traceback.format_exc())
             self.set_progress(0)
 
+    def populate_folder_selector(self):
+        self.folder_label_to_id = {}
+        labels = []
+        for folder in self.scan_folders:
+            folder_id = str(folder.get("id", ""))
+            folder_name = str(folder.get("name", "") or f"Folder {folder_id}")
+            count = sum(1 for scan in self.scans if str(scan.get("folder_id", "")) == folder_id)
+            label = f"{folder_name} ({count})"
+            labels.append(label)
+            self.folder_label_to_id[label] = folder_id
+
+        known_folder_ids = {str(folder.get("id", "")) for folder in self.scan_folders}
+        missing_folder_count = sum(1 for scan in self.scans if str(scan.get("folder_id", "")) not in known_folder_ids)
+        if missing_folder_count:
+            label = f"Unfiled / Unknown Folder ({missing_folder_count})"
+            labels.append(label)
+            self.folder_label_to_id[label] = "__MISSING__"
+
+        if not labels and self.scans:
+            labels = ["All Scans"]
+            self.folder_label_to_id["All Scans"] = ""
+
+        self.folder_combo.configure(values=labels)
+        self.folder_filter_var.set(labels[0] if labels else "")
+        self.populate_scan_tree()
+
+    def on_folder_select(self, _event=None):
+        self.populate_scan_tree()
+
+    def selected_folder_id(self) -> str:
+        return self.folder_label_to_id.get(self.folder_filter_var.get(), "")
+
     def populate_scan_tree(self):
         for item in self.scan_tree.get_children():
             self.scan_tree.delete(item)
         self.selected_scan_id = None
         self.selected_scan_name = ""
-        for s in self.scans:
+        folder_id = self.selected_folder_id()
+        if folder_id == "__MISSING__":
+            known_folder_ids = {str(folder.get("id", "")) for folder in self.scan_folders}
+            visible_scans = [s for s in self.scans if str(s.get("folder_id", "")) not in known_folder_ids]
+        else:
+            visible_scans = [
+                s for s in self.scans
+                if not folder_id or str(s.get("folder_id", "")) == folder_id
+            ]
+        for s in visible_scans:
             scan_id = str(s.get("id", ""))
             name = str(s.get("name", ""))
             status = str(s.get("status", ""))
@@ -1566,6 +1624,8 @@ class NessusAuthDashboardGUI:
                 except Exception:
                     lm = str(lm)
             self.scan_tree.insert("", "end", values=(scan_id, name, status, folder, lm))
+        folder_name = self.folder_filter_var.get() or "No folder"
+        self.status_var.set(f"Showing {len(visible_scans)} scans in {folder_name}")
 
     def on_scan_select(self, _event=None):
         sel = self.scan_tree.selection()
