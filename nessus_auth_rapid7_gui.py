@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Nessus Authentication Dashboard - Rapid7-like GUI
+Nessus Credential Assurance Dashboard
 Author: Sleeping Bhudda
 
 Purpose
@@ -102,7 +102,7 @@ except Exception:
 
 warnings.filterwarnings("ignore", message="Unverified HTTPS request")
 
-APP_NAME = "Nessus Auth Dashboard - Rapid7-like"
+APP_NAME = "Nessus Credential Assurance Dashboard"
 APP_VERSION = "2.0"
 AUTHOR = "Sleeping Bhudda"
 USER_AGENT = f"nessus-auth-dashboard/{APP_VERSION} ({AUTHOR})"
@@ -1245,7 +1245,10 @@ class NessusAuthDashboardGUI:
         self.style.configure("Panel.TFrame", background=panel)
         self.style.configure("TLabel", background=bg, foreground=fg)
         self.style.configure("Panel.TLabel", background=panel, foreground=fg)
-        self.style.configure("Header.TLabel", background=bg, foreground=accent, font=("Segoe UI", 16, "bold"))
+        self.style.configure("AppTitle.TLabel", background=bg, foreground=accent, font=("Segoe UI", 18, "bold"))
+        self.style.configure("Subtitle.TLabel", background=bg, foreground=muted, font=("Segoe UI", 10))
+        self.style.configure("Version.TLabel", background=panel, foreground=fg, font=("Segoe UI", 9, "bold"), padding=[8, 3])
+        self.style.configure("Header.TLabel", background=bg, foreground=accent, font=("Segoe UI", 15, "bold"))
         self.style.configure("Card.TFrame", background=panel, relief="ridge", borderwidth=1)
         self.style.configure("CardTitle.TLabel", background=panel, foreground=muted, font=("Segoe UI", 10, "bold"))
         self.style.configure("CardValue.TLabel", background=panel, foreground=fg, font=("Segoe UI", 24, "bold"))
@@ -1292,13 +1295,22 @@ class NessusAuthDashboardGUI:
 
     def build_top_bar(self):
         frame = ttk.Frame(self.root)
-        frame.pack(fill="x", padx=10, pady=(8, 4))
-        ttk.Label(frame, text=f"{APP_NAME}", style="Header.TLabel").pack(side="left")
-        ttk.Label(frame, text=f"   Author: {AUTHOR}").pack(side="left")
+        frame.pack(fill="x", padx=12, pady=(10, 6))
+
+        title_group = ttk.Frame(frame)
+        title_group.pack(side="left", fill="x", expand=True)
+        ttk.Label(title_group, text=APP_NAME, style="AppTitle.TLabel").pack(anchor="w")
+        ttk.Label(
+            title_group,
+            text=f"Credentialed scan coverage, authentication status, and reachability reporting | Author: {AUTHOR}",
+            style="Subtitle.TLabel",
+        ).pack(anchor="w", pady=(2, 0))
+
+        ttk.Label(frame, text=f"v{APP_VERSION}", style="Version.TLabel").pack(side="right", padx=(10, 0))
         ttk.Checkbutton(frame, text="Dark Mode", variable=self.dark_mode, command=self.apply_theme).pack(side="right")
 
     def build_scan_section(self):
-        container = ttk.LabelFrame(self.root, text="Nessus API Connection and Scan Selection")
+        container = ttk.LabelFrame(self.root, text="Connection and Scan Selection")
         container.pack(fill="x", padx=10, pady=4)
 
         row1 = ttk.Frame(container)
@@ -1336,13 +1348,13 @@ class NessusAuthDashboardGUI:
         row3.pack(fill="x", padx=8, pady=4)
         ttk.Label(row3, text="History ID (optional; blank = latest/default)").pack(side="left")
         ttk.Entry(row3, textvariable=self.history_id_var, width=20).pack(side="left", padx=6)
-        ttk.Button(row3, text="Load Dashboard Preview", command=self.load_preview_thread).pack(side="left", padx=6)
+        ttk.Button(row3, text="Build Dashboard", command=self.load_preview_thread).pack(side="left", padx=6)
         ttk.Button(row3, text="Clear", command=self.clear_dashboard).pack(side="left", padx=4)
 
     def build_action_bar(self):
         frame = ttk.Frame(self.root)
         frame.pack(fill="x", padx=10, pady=4)
-        ttk.Label(frame, text="Search Host / Reason").pack(side="left")
+        ttk.Label(frame, text="Search").pack(side="left")
         entry = ttk.Entry(frame, textvariable=self.filter_text_var, width=35)
         entry.pack(side="left", padx=5)
         entry.bind("<KeyRelease>", lambda _e: self.refresh_host_table())
@@ -1368,7 +1380,7 @@ class NessusAuthDashboardGUI:
         self.drilldown_tab = ttk.Frame(self.notebook)
         self.logs_tab = ttk.Frame(self.notebook)
 
-        self.notebook.add(self.dashboard_tab, text="Dashboard Preview")
+        self.notebook.add(self.dashboard_tab, text="Dashboard")
         self.notebook.add(self.hosts_tab, text="Host Status")
         self.notebook.add(self.protocols_tab, text="Protocol Breakdown")
         self.notebook.add(self.findings_tab, text="Auth Findings")
@@ -1697,7 +1709,7 @@ class NessusAuthDashboardGUI:
             f"Scan Name: {self.data.scan_name}",
             f"Scan ID: {self.data.scan_id} | History ID: {self.data.history_id or 'latest/default'} | Generated: {self.data.generated_at}",
             "",
-            f"Rapid7-like mutually exclusive counts: Total={m.get('Total IPs',0)}, Pass={m.get('Auth Passed',0)}, Fail={m.get('Auth Failed',0)}, Partial={m.get('Partial Auth',0)}, No Credentials={m.get('No Credentials',0)}, Not Reachable={m.get('Not Reachable',0)}, Unknown={m.get('Unknown',0)}",
+            f"Mutually exclusive counts: Total={m.get('Total IPs',0)}, Pass={m.get('Auth Passed',0)}, Fail={m.get('Auth Failed',0)}, Partial={m.get('Partial Auth',0)}, No Credentials={m.get('No Credentials',0)}, Not Reachable={m.get('Not Reachable',0)}, Unknown={m.get('Unknown',0)}",
             f"Credential Coverage % = Pass + Partial / Total = {m.get('Credential Coverage %',0)}%",
             f"Auth Success % = Pass / Total = {m.get('Auth Success %',0)}%",
             "",

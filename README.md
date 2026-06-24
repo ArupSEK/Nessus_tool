@@ -1,6 +1,8 @@
-# Nessus_tool
+# Nessus Credential Assurance Dashboard
 
-Repository for Nessus tooling.
+Professional Nessus authentication coverage dashboard.
+
+Author: Sleeping Bhudda
 
 ## GUI
 
